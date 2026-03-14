@@ -1,0 +1,11 @@
+[Unit]
+Description=Run TronClass Bot daily at 8 AM
+
+[Timer]
+# Run every day at 8:00 AM
+OnCalendar=*-*-* 08:00:00
+# Ensure it runs even if the computer was off at 8 AM
+Persistent=true
+
+[Install]
+WantedBy=timers.target

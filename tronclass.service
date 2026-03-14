@@ -1,0 +1,14 @@
+[Unit]
+Description=Run TronClass Gemini Automation
+After=network.target
+
+[Service]
+Type=oneshot
+User=your_username
+WorkingDirectory=/path/to/your/script
+ExecStart=/usr/bin/python3 /path/to/your/script/main.py
+# If you use a virtual environment, use the path to the venv python:
+# ExecStart=/path/to/your/script/venv/bin/python3 /path/to/your/script/main.py
+
+[Install]
+WantedBy=multi-user.target
