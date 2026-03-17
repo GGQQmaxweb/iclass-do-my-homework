@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from api.auth_module import Authenticator
 from api.iclass_api import TronClassAPI
-
+import asyncio
 # --- Configuration ---
 load_dotenv()
 
@@ -42,7 +42,7 @@ def get_latest_flash_model():
             return latest
 
     except Exception as e:
-        print(f"⚠️ Could not list models: {e}")
+        print(f"⚠ Could not list models: {e}")
 
     # Fallback to a stable default if listing fails
     return 'models/gemini-1.5-flash'
@@ -56,7 +56,7 @@ def strip_html(text):
     if not text: return ""
     return re.sub('<[^<]+?>', '', text)
 
-def main():
+async def main():
     auth = Authenticator()
     try:
         session = auth.perform_auth()
@@ -66,7 +66,7 @@ def main():
         print(f"❌ Login failed: {e}")
         return
 
-    data = api.get_todos()
+    data = await api.get_todos()
     todos = data.get('todo_list', [])
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -77,7 +77,7 @@ def main():
 
         # 1. Check Blacklist
         if any(blacklisted in course_name for blacklisted in BLACKLIST_COURSES):
-            print(f"🛡️ Skipping '{title}' - Course '{course_name}' is on the blacklist.")
+            print(f"🛡 Skipping '{title}' - Course '{course_name}' is on the blacklist.")
             continue
 
         # 2. Check Deadline
@@ -89,7 +89,8 @@ def main():
             print(f"\n📝 Processing Boring Homework: {title} (Course: {course_name})")
 
             # 3. Get Details
-            details = api.get_activitie(task_id)
+            details = await api.get_activitie(task_id)
+            print(details)
             raw_desc = details.get('data', {}).get('description', '')
             description = strip_html(raw_desc)
 
@@ -104,10 +105,10 @@ def main():
 
             try:
                 print(f"📤 Uploading...")
-                upload_id = api.upload_file(file_path)
+                upload_id = await api.upload_file(file_path)
 
                 if upload_id:
-                    success = api.submit_homework(task_id, [upload_id])
+                    success = await api.submit_homework(task_id, [upload_id])
                     if success:
                         print(f"✅ Successfully submitted {title}")
                 else:
@@ -124,4 +125,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
