@@ -20,7 +20,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-And editing .env file on the projeck folder
+And editing .env file on the project folder
 ```.env
 USERNAMEID="Your Student id"
 PASSWORD="Your sso PASSWORD"
