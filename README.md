@@ -19,3 +19,10 @@ cd iclass-do-my-homework/
 chmod +x install.sh
 ./install.sh
 ```
+
+And editing .env file on the projeck folder
+```.env
+USERNAMEID="Your Student id"
+PASSWORD="Your sso PASSWORD"
+GEMINI_API_KEY="Yor GEMINI api key"
+```
