@@ -9,7 +9,7 @@ An TronClass homework Auto-Submitter
 
 # How do you setup this?
 
-get a linux server with systemd and python venv package on it. And run the follow command script
+get a linux server with systemd and python venv package on it. And run the follow command.
 ```bash
 # git clone this project
 git clone https://github.com/GGQQmaxweb/iclass-do-my-homework.git
