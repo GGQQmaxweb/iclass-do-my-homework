@@ -4,9 +4,13 @@ import datetime
 import asyncio
 import json
 import mimetypes
+import shutil
+from pathlib import Path
 from dotenv import load_dotenv
 from google import genai  # New SDK
 from PyPDF2 import PdfReader
+from xhtml2pdf import pisa
+import markdown
 from api.auth_module import Authenticator
 from api.iclass_api import TronClassAPI
 
@@ -53,8 +57,6 @@ def get_latest_flash_model():
 
 selected_model_name = get_latest_flash_model()
 
-import json
-import mimetypes
 
 def strip_html(text):
     if not text: return ""
@@ -69,7 +71,7 @@ def is_text_file(file_path: str) -> bool:
             'application/javascript',
             'application/xhtml+xml'
         )
-    return file_path.lower().endswith(('.txt', '.md', '.json', '.csv', '.xml', '.html', '.py', '.js', '.css'))
+    return file_path.lower().endswith(('.txt', '.md', '.json', '.csv', '.xml', '.html', '.py', '.js', '.css', '.pdf'))
 
 def read_text_file(file_path: str, max_chars: int = 20000) -> str:
     try:
@@ -96,6 +98,25 @@ def extract_file_text(file_path: str, max_chars: int = 20000) -> str:
     if file_path.lower().endswith('.pdf'):
         return read_pdf_file(file_path, max_chars)
     return read_text_file(file_path, max_chars)
+
+
+def convert_markdown_to_pdf(markdown_text: str, pdf_path: str) -> bool:
+    try:
+        html = markdown.markdown(markdown_text)
+        html = f"<html><body>{html}</body></html>"
+        with open(pdf_path, "wb") as f:
+            pisa_status = pisa.CreatePDF(html, dest=f)
+        return not getattr(pisa_status, "err", False)
+    except Exception:
+        return False
+
+
+def clean_tmp_dir(tmp_dir: Path) -> None:
+    try:
+        if tmp_dir.exists() and tmp_dir.is_dir():
+            shutil.rmtree(tmp_dir)
+    except Exception as e:
+        print(f"⚠ Failed to clean tmp directory {tmp_dir}: {e}")
 
 
 def summarize_course_info(course_info: dict) -> str:
@@ -192,16 +213,19 @@ async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str,
         prompt_parts.append(file_section)
 
     prompt_parts.append(
-        "Provide a student submission. No markdown, no emoji, keep answer short, use ZH-TW as main language except for single English words exactly as they appear in the question."
+        "Provide a student submission as valid markdown. No emoji, keep answer short, use ZH-TW as main language except for single English words exactly as they appear in the question."
     )
 
     return '\n\n'.join([part for part in prompt_parts if part])
 
 async def main():
+    tmp_dir = Path("./tmp")
+    tmp_dir.mkdir(exist_ok=True)
+
     auth = Authenticator()
     try:
         session = auth.perform_auth()
-        api = TronClassAPI(session)
+        api = TronClassAPI(session, download_dir=tmp_dir)
         print("🔓 Authenticated.")
     except Exception as e:
         print(f"❌ Login failed: {e}")
@@ -246,13 +270,20 @@ async def main():
                 continue
 
             # 5. File Handling & Submission
-            file_path = f"auto_submit_{task_id}.txt"
-            with open(file_path, "w", encoding="utf-8") as f:
+            markdown_path = tmp_dir / f"auto_submit_{task_id}.md"
+            pdf_path = tmp_dir / f"auto_submit_{task_id}.pdf"
+            with open(markdown_path, "w", encoding="utf-8") as f:
                 f.write(ai_content)
 
+            if not convert_markdown_to_pdf(ai_content, str(pdf_path)):
+                print("❌ PDF conversion failed")
+                clean_tmp_dir(tmp_dir)
+                tmp_dir.mkdir(exist_ok=True)
+                continue
+
             try:
-                print(f"📤 Uploading...")
-                upload_id = await api.upload_file(file_path)
+                print(f"📤 Uploading PDF...")
+                upload_id = await api.upload_file(str(pdf_path))
 
                 if upload_id:
                     success = await api.submit_homework(task_id, [upload_id])
@@ -263,8 +294,8 @@ async def main():
             except Exception as e:
                 print(f"❌ Submission error: {e}")
             finally:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                clean_tmp_dir(tmp_dir)
+                tmp_dir.mkdir(exist_ok=True)
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
 

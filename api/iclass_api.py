@@ -8,8 +8,9 @@ from dateutil.relativedelta import relativedelta
 from pathlib import Path
 
 class TronClassAPI:
-    def __init__(self, session):
+    def __init__(self, session, download_dir=None):
         self.session = session
+        self.download_dir = Path(download_dir) if download_dir is not None else Path.home() / 'Downloads'
 
     async def get_todos(self):
         todos_url = "https://iclass.tku.edu.tw/api/todos"
@@ -57,7 +58,7 @@ class TronClassAPI:
             encoded_filename = encoded_filename.replace(" filename=UTF-8''","")
             filename = urllib.parse.unquote(encoded_filename)
 
-        downloads_dir = Path.home() / 'Downloads'
+        downloads_dir = self.download_dir
         os.makedirs(downloads_dir, exist_ok=True)  # Create if it doesn't exist
 
         file_path = downloads_dir / filename
