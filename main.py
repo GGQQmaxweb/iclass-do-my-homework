@@ -1,3 +1,4 @@
+import argparse
 import os
 import re
 import datetime
@@ -56,6 +57,17 @@ def get_latest_flash_model():
     return 'gemini-2.5-flash'
 
 selected_model_name = get_latest_flash_model()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Auto submit selected TronClass homework.')
+    parser.add_argument(
+        '-u', '--homework',
+        nargs='+',
+        help='Select homework tasks to process by task id or keywords from the title/course name.',
+        metavar='HOMEWORK'
+    )
+    return parser.parse_args()
 
 
 def strip_html(text):
@@ -191,6 +203,7 @@ async def download_files_for_activity(api: TronClassAPI, activity_data: dict) ->
 
 async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str, task_id: int, course_id: int | None, description: str) -> str:
     course_summary = ''
+    print()(f"🔍 Fetching course info for course_id={course_id}...")
     if course_id is not None:
         course_info = await api.get_activities(course_id)  #sym:get_activities
         course_summary = summarize_course_info(course_info)
@@ -265,6 +278,7 @@ async def main():
                     contents=prompt
                 )
                 ai_content = response.text
+                print(f"🤖 AI Generated Content:\n{ai_content[:500]}...")  # Print first 500 chars
             except Exception as e:
                 print(f"❌ AI Generation failed: {e}")
                 continue
