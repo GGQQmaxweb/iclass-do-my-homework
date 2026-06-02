@@ -74,6 +74,38 @@ def strip_html(text):
     if not text: return ""
     return re.sub('<[^<]+?>', '', text)
 
+
+def parse_homework_selection(selection: list[str]) -> tuple[set[int], list[str]]:
+    ids = set()
+    terms = []
+    for value in selection:
+        normalized = value.strip()
+        if normalized.isdigit():
+            ids.add(int(normalized))
+        elif normalized:
+            terms.append(normalized.lower())
+    return ids, terms
+
+
+def is_selected_homework(item: dict, selection: list[str]) -> bool:
+    if not selection:
+        return True
+
+    selected_ids, selected_terms = parse_homework_selection(selection)
+    task_id = item.get('id')
+    title = str(item.get('title', '')).lower()
+    course_name = str(item.get('course_name', '')).lower()
+
+    if task_id is not None and task_id in selected_ids:
+        return True
+
+    for term in selected_terms:
+        if term in title or term in course_name:
+            return True
+
+    return False
+
+
 def is_text_file(file_path: str) -> bool:
     mime_type, _ = mimetypes.guess_type(file_path)
     if mime_type:
@@ -232,6 +264,7 @@ async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str,
     return '\n\n'.join([part for part in prompt_parts if part])
 
 async def main():
+    args = parse_args()
     tmp_dir = Path("./tmp")
     tmp_dir.mkdir(exist_ok=True)
 
@@ -248,7 +281,12 @@ async def main():
     todos = data.get('todo_list', [])
     now = datetime.datetime.now(datetime.timezone.utc)
 
+    if args.homework:
+        print(f"🔎 Selected homework filters: {args.homework}")
+
     for item in todos:
+        if not is_selected_homework(item, args.homework or []):
+            continue
         course_name = item.get('course_name', '').strip()
         title = item['title']
         task_id = item['id']
