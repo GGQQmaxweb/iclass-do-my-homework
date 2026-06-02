@@ -7,6 +7,7 @@ import json
 import mimetypes
 import shutil
 from pathlib import Path
+from io import BytesIO
 from dotenv import load_dotenv
 from google import genai  # New SDK
 from PyPDF2 import PdfReader
@@ -175,11 +176,39 @@ def extract_file_text(file_path: str, max_chars: int = 20000) -> str:
 def convert_markdown_to_pdf(markdown_text: str, pdf_path: str) -> bool:
     try:
         html = markdown.markdown(markdown_text)
-        html = f"<html><body>{html}</body></html>"
+        # Wrap with proper HTML structure and CSS
+        html_content = f"""<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 30px; line-height: 1.6; }}
+        h1, h2, h3, h4 {{ color: #333; margin-top: 20px; margin-bottom: 10px; }}
+        h1 {{ font-size: 24px; }}
+        h2 {{ font-size: 20px; }}
+        p {{ margin: 10px 0; }}
+        pre {{ background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }}
+        code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; }}
+        li {{ margin: 5px 0; }}
+    </style>
+</head>
+<body>
+{html}
+</body>
+</html>"""
+        
+        result_file = BytesIO()
+        pisa_status = pisa.CreatePDF(html_content, dest=result_file)
+        
+        if pisa_status.err:
+            print(f"⚠ PDF conversion error: {pisa_status.err}")
+            return False
+        
         with open(pdf_path, "wb") as f:
-            pisa_status = pisa.CreatePDF(html, dest=f)
-        return not getattr(pisa_status, "err", False)
-    except Exception:
+            f.write(result_file.getvalue())
+        
+        return True
+    except Exception as e:
+        print(f"⚠ PDF conversion exception: {e}")
         return False
 
 
@@ -263,7 +292,7 @@ async def download_files_for_activity(api: TronClassAPI, activity_data: dict) ->
 
 async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str, task_id: int, course_id: int | None, description: str) -> str:
     course_summary = ''
-    print()(f"🔍 Fetching course info for course_id={course_id}...")
+    print(f"🔍 Fetching course info for course_id={course_id}...")
     if course_id is not None:
         course_info = await api.get_activities(course_id)  #sym:get_activities
         course_summary = summarize_course_info(course_info)
@@ -330,12 +359,12 @@ async def main():
             print(f"🛡 Skipping '{title}' - Course '{course_name}' is on the blacklist.")
             continue
 
-        # 2. Check Deadline
+        # 2. Check Deadline (skip if user explicitly selected homework via -u)
         end_time_str = item['end_time']
         due_date = datetime.datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
         time_remaining = due_date - now
 
-        if 0 < time_remaining.days <= DUE_SOON_DAYS:
+        if (args.homework is not None) or (0 < time_remaining.days <= DUE_SOON_DAYS):
             print(f"\n📝 Processing Boring Homework: {title} (Course: {course_name})")
 
             course_id = item.get('course_id') or (item.get('course') or {}).get('id')
