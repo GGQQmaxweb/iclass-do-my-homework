@@ -63,8 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Auto submit selected TronClass homework.')
     parser.add_argument(
         '-u', '--homework',
-        nargs='+',
-        help='Select homework tasks to process by task id or keywords from the title/course name.',
+        nargs='*',
+        help='Select homework tasks to process by task id or keywords from the title/course name. If omitted after -u, a list will be shown for index selection.',
         metavar='HOMEWORK'
     )
     return parser.parse_args()
@@ -85,6 +85,34 @@ def parse_homework_selection(selection: list[str]) -> tuple[set[int], list[str]]
         elif normalized:
             terms.append(normalized.lower())
     return ids, terms
+
+
+def select_homework_by_index(todos: list[dict]) -> list[str]:
+    if not todos:
+        print("No homework found.")
+        return []
+
+    print("Available homework tasks:")
+    for idx, item in enumerate(todos, start=1):
+        print(f"{idx}. {item.get('title', '<no title>')} (Course: {item.get('course_name', '<no course>')})")
+
+    selection = input("Enter indexes separated by spaces or commas: ").strip()
+    if not selection:
+        print("No selection entered.")
+        return []
+
+    selected_ids = []
+    for part in re.split(r'[,\s]+', selection):
+        if part.isdigit():
+            index = int(part)
+            if 1 <= index <= len(todos):
+                selected_ids.append(str(todos[index - 1].get('id')))
+            else:
+                print(f"Index {index} is out of range, ignoring.")
+        else:
+            print(f"Ignoring invalid index '{part}'.")
+
+    return selected_ids
 
 
 def is_selected_homework(item: dict, selection: list[str]) -> bool:
@@ -281,8 +309,14 @@ async def main():
     todos = data.get('todo_list', [])
     now = datetime.datetime.now(datetime.timezone.utc)
 
+    if args.homework is not None and len(args.homework) == 0:
+        args.homework = select_homework_by_index(todos)
+
     if args.homework:
         print(f"🔎 Selected homework filters: {args.homework}")
+    elif args.homework is not None:
+        print("No homework selected. Exiting.")
+        return
 
     for item in todos:
         if not is_selected_homework(item, args.homework or []):
