@@ -366,7 +366,7 @@ async def main():
 
             if not convert_markdown_to_pdf(ai_content, str(pdf_path)):
                 print("❌ PDF conversion failed")
-                #clean_tmp_dir(tmp_dir)
+                clean_tmp_dir(tmp_dir)
                 tmp_dir.mkdir(exist_ok=True)
                 continue
 
@@ -375,16 +375,16 @@ async def main():
                 upload_id = await api.upload_file(str(pdf_path))
 
                 if upload_id:
-                    #success = await api.submit_homework(task_id, [upload_id])
-                    #if success:
-                    #   print(f"✅ Successfully submitted {title}")
+                    success = await api.submit_homework(task_id, [upload_id])
+                    if success:
+                       print(f"✅ Successfully submitted {title}")
                     pass
                 else:
                     print("❌ Failed to get Upload ID.")
             except Exception as e:
                 print(f"❌ Submission error: {e}")
             finally:
-                #clean_tmp_dir(tmp_dir)
+                clean_tmp_dir(tmp_dir)
                 tmp_dir.mkdir(exist_ok=True)
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
