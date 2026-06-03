@@ -18,6 +18,8 @@ from api.iclass_api import TronClassAPI
 # --- Configuration ---
 load_dotenv()
 
+SKILLS_DIR = Path("./skills")
+
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 DUE_SOON_DAYS = 1
 
@@ -172,6 +174,68 @@ def extract_file_text(file_path: str, max_chars: int = 20000) -> str:
     return read_text_file(file_path, max_chars)
 
 
+def sanitize_course_name(course_name: str) -> str:
+    """Convert course name to safe filename, preserving CJK characters"""
+    # Replace spaces and common separators with underscores
+    name = re.sub(r'[\s/\\:*?"<>|]+', '_', course_name)
+    # Remove only truly problematic filesystem characters
+    name = re.sub(r'[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff-]', '', name)
+    return name.lower()
+
+
+def get_skill_path(course_name: str) -> Path:
+    """Get the path to a skill file for a course"""
+    safe_name = sanitize_course_name(course_name)
+    return SKILLS_DIR / f"skill_{safe_name}.md"
+
+
+def load_skill(course_name: str) -> str:
+    """Load skill instructions for a course, or return empty string if not found"""
+    skill_path = get_skill_path(course_name)
+    if skill_path.exists():
+        try:
+            with open(skill_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            print(f"⚠ Failed to load skill {skill_path}: {e}")
+    return ""
+
+
+def create_default_skill(course_name: str) -> None:
+    """Create a default skill file for a course if it doesn't exist"""
+    SKILLS_DIR.mkdir(exist_ok=True)
+    skill_path = get_skill_path(course_name)
+    
+    if not skill_path.exists():
+        default_skill = f"""# Skill: {course_name}
+
+## Course Strategy
+Customize this skill to define how AI should approach homework for **{course_name}**.
+
+## Instructions
+- Modify this file to add course-specific guidelines
+- Use markdown formatting
+- The content will be appended to the homework prompt
+
+## Examples
+- Key topics to focus on
+- Preferred writing style
+- Formatting requirements
+- Special emphasis areas
+
+## Tips
+- Be specific and detailed
+- Reference course materials or textbook chapters
+- Include any unique requirements for this course
+"""
+        try:
+            with open(skill_path, 'w', encoding='utf-8') as f:
+                f.write(default_skill)
+            print(f"✨ Created new skill file: {skill_path}")
+        except Exception as e:
+            print(f"⚠ Failed to create skill {skill_path}: {e}")
+
+
 def convert_markdown_to_pdf(markdown_text: str, pdf_path: str) -> bool:
     try:
         pdf = MarkdownPdf(toc_level=2)
@@ -278,12 +342,23 @@ async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str,
     file_context = await download_files_for_activity(api, activity_details.get('data', {}))
     file_section = f"\n\nAdditional file contents:\n{file_context}" if file_context else ''
 
+    # Load skill for this course
+    skill_content = load_skill(course_name)
+    if not skill_content:
+        create_default_skill(course_name)
+        skill_content = load_skill(course_name)
+    
+    skill_section = f"\n\nCourse Skill/Strategy:\n{skill_content}" if skill_content else ''
+
     prompt_parts = [
         f"Course: {course_name}",
         f"Homework title: {title}",
         f"Course info: {course_summary}",
         f"Homework instruction: {detailed_description}",
     ]
+
+    if skill_section:
+        prompt_parts.append(skill_section)
 
     if file_section:
         prompt_parts.append(file_section)
