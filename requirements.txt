@@ -4,5 +4,5 @@ python-dateutil
 google-genai
 PyPDF2
 markdown
-xhtml2pdf
+markdown-pdf
 

@@ -7,11 +7,10 @@ import json
 import mimetypes
 import shutil
 from pathlib import Path
-from io import BytesIO
 from dotenv import load_dotenv
 from google import genai  # New SDK
 from PyPDF2 import PdfReader
-from xhtml2pdf import pisa
+from markdown_pdf import MarkdownPdf, Section
 import markdown
 from api.auth_module import Authenticator
 from api.iclass_api import TronClassAPI
@@ -175,37 +174,12 @@ def extract_file_text(file_path: str, max_chars: int = 20000) -> str:
 
 def convert_markdown_to_pdf(markdown_text: str, pdf_path: str) -> bool:
     try:
-        html = markdown.markdown(markdown_text)
-        # Wrap with proper HTML structure and CSS
-        html_content = f"""<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 30px; line-height: 1.6; }}
-        h1, h2, h3, h4 {{ color: #333; margin-top: 20px; margin-bottom: 10px; }}
-        h1 {{ font-size: 24px; }}
-        h2 {{ font-size: 20px; }}
-        p {{ margin: 10px 0; }}
-        pre {{ background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-        code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; }}
-        li {{ margin: 5px 0; }}
-    </style>
-</head>
-<body>
-{html}
-</body>
-</html>"""
+        pdf = MarkdownPdf(toc_level=2)
+        pdf.add_section(Section(markdown_text))
+        pdf.save(pdf_path)
         
-        result_file = BytesIO()
-        pisa_status = pisa.CreatePDF(html_content, dest=result_file)
-        
-        if pisa_status.err:
-            print(f"⚠ PDF conversion error: {pisa_status.err}")
-            return False
-        
-        with open(pdf_path, "wb") as f:
-            f.write(result_file.getvalue())
-        
+        file_size = os.path.getsize(pdf_path)
+        print(f"✅ PDF generated successfully: {pdf_path} ({file_size} bytes)")
         return True
     except Exception as e:
         print(f"⚠ PDF conversion exception: {e}")
@@ -392,7 +366,7 @@ async def main():
 
             if not convert_markdown_to_pdf(ai_content, str(pdf_path)):
                 print("❌ PDF conversion failed")
-                clean_tmp_dir(tmp_dir)
+                #clean_tmp_dir(tmp_dir)
                 tmp_dir.mkdir(exist_ok=True)
                 continue
 
@@ -401,15 +375,16 @@ async def main():
                 upload_id = await api.upload_file(str(pdf_path))
 
                 if upload_id:
-                    success = await api.submit_homework(task_id, [upload_id])
-                    if success:
-                        print(f"✅ Successfully submitted {title}")
+                    #success = await api.submit_homework(task_id, [upload_id])
+                    #if success:
+                    #   print(f"✅ Successfully submitted {title}")
+                    pass
                 else:
                     print("❌ Failed to get Upload ID.")
             except Exception as e:
                 print(f"❌ Submission error: {e}")
             finally:
-                clean_tmp_dir(tmp_dir)
+                #clean_tmp_dir(tmp_dir)
                 tmp_dir.mkdir(exist_ok=True)
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
