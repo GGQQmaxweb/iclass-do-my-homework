@@ -258,6 +258,91 @@ def clean_tmp_dir(tmp_dir: Path) -> None:
         print(f"⚠ Failed to clean tmp directory {tmp_dir}: {e}")
 
 
+async def download_course_materials(api: TronClassAPI, course_info: dict, course_name: str, tmp_dir: Path) -> str:
+    """Download and read course material files, store in tmp"""
+    materials_text = []
+    
+    if not isinstance(course_info, dict):
+        return ''
+    
+    data = course_info.get('data', [])
+    if not isinstance(data, list):
+        return ''
+    
+    # Create course-specific temp directory
+    course_tmp = tmp_dir / sanitize_course_name(course_name)
+    course_tmp.mkdir(exist_ok=True)
+    
+    print(f"📚 Downloading course materials for {course_name}...")
+    
+    for idx, activity in enumerate(data[:3], 1):  # Limit to first 3 activities
+        if not isinstance(activity, dict):
+            continue
+        
+        # Extract files from activity
+        for ref_key in ('attachments', 'files', 'resources', 'materials'):
+            files_list = activity.get(ref_key, [])
+            if not isinstance(files_list, list):
+                continue
+            
+            for file_item in files_list:
+                if not isinstance(file_item, dict):
+                    continue
+                
+                file_id = file_item.get('reference_id') or file_item.get('file_id') or file_item.get('id')
+                file_name = file_item.get('name') or file_item.get('filename', f'file_{idx}')
+                
+                if not file_id:
+                    continue
+                
+                try:
+                    print(f"  📥 Downloading: {file_name}...")
+                    file_path = await api.download(file_id)
+                    
+                    if file_path and os.path.exists(file_path) and is_text_file(file_path):
+                        content = extract_file_text(file_path, max_chars=5000)
+                        if content:
+                            materials_text.append(f"**{file_name}**:\n{content[:1000]}...")
+                except Exception as e:
+                    print(f"  ⚠ Failed to download {file_name}: {e}")
+    
+    return '\n\n'.join(materials_text) if materials_text else ''
+
+
+async def suggest_skill_update(api: TronClassAPI, course_name: str, course_materials: str) -> str:
+    """Use AI to check if skill needs updating based on course materials"""
+    if not course_materials:
+        return ''
+    
+    current_skill = load_skill(course_name)
+    
+    prompt = f"""Given the course materials and current skill, suggest updates to the skill if needed.
+
+**Current Skill for {course_name}:**
+{current_skill if current_skill else "No skill defined yet"}
+
+**Course Materials Preview:**
+{course_materials[:2000]}
+
+Please provide:
+1. Key topics/concepts found in materials
+2. Suggested additions to the skill
+3. Important emphasis areas
+4. Any recommended changes
+
+Keep suggestions concise and actionable."""
+    
+    try:
+        response = client.models.generate_content(
+            model=selected_model_name,
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        print(f"⚠ AI skill suggestion failed: {e}")
+        return ''
+
+
 def summarize_course_info(course_info: dict) -> str:
     if not course_info:
         return ''
@@ -328,12 +413,38 @@ async def download_files_for_activity(api: TronClassAPI, activity_data: dict) ->
 
     return '\n\n'.join(downloaded_texts)
 
-async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str, task_id: int, course_id: int | None, description: str) -> str:
+async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str, task_id: int, course_id: int | None, description: str, tmp_dir: Path) -> str:
     course_summary = ''
     print(f"🔍 Fetching course info for course_id={course_id}...")
     if course_id is not None:
         course_info = await api.get_activities(course_id)  #sym:get_activities
         course_summary = summarize_course_info(course_info)
+        
+        # Download course materials
+        materials = await download_course_materials(api, course_info, course_name, tmp_dir)
+        
+        # Check if skill needs updating
+        if materials:
+            print("🤖 Analyzing course materials for skill improvements...")
+            suggestions = await suggest_skill_update(api, course_name, materials)
+            
+            if suggestions:
+                print(f"\n💡 AI Skill Suggestions for {course_name}:")
+                print("-" * 60)
+                print(suggestions)
+                print("-" * 60)
+                
+                # Ask user if they want to update the skill
+                response = input("\n📝 Update skill file with these suggestions? (y/n): ").strip().lower()
+                if response == 'y':
+                    skill_path = get_skill_path(course_name)
+                    try:
+                        with open(skill_path, 'a', encoding='utf-8') as f:
+                            f.write(f"\n\n## AI Suggestions (Updated: {datetime.datetime.now().strftime('%Y-%m-%d')})\n")
+                            f.write(suggestions)
+                        print(f"✅ Skill file updated: {skill_path}")
+                    except Exception as e:
+                        print(f"⚠ Failed to update skill: {e}")
 
     activity_details = await api.get_activitie(task_id)
     raw_description = activity_details.get('data', {}).get('description', '')
@@ -420,7 +531,7 @@ async def main():
             raw_desc = item.get('description') or ''
             description = strip_html(raw_desc)
 
-            prompt = await build_homework_prompt(api, title, course_name, task_id, course_id, description)
+            prompt = await build_homework_prompt(api, title, course_name, task_id, course_id, description, tmp_dir)
 
             try:
                 response = client.models.generate_content(
