@@ -570,7 +570,7 @@ async def main():
             except Exception as e:
                 print(f"❌ Submission error: {e}")
             finally:
-                clean_tmp_dir(tmp_dir)
+                #clean_tmp_dir(tmp_dir)
                 tmp_dir.mkdir(exist_ok=True)
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
