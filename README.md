@@ -57,19 +57,3 @@ docker compose logs -f
 # Stop the container
 docker compose down
 ```
-
-### Run as a systemd Service (Alternative)
-To automatically configure and run the bot as a systemd background service on your server:
-
-```bash
-chmod +x install_bot.sh
-./install_bot.sh
-```
-
-Or check logs/status anytime:
-```bash
-sudo systemctl status tronclass-bot.service
-journalctl -u tronclass-bot.service -f
-```
-
-
