@@ -32,30 +32,53 @@ BLACKLIST_COURSES = [
 # Initialize the new Client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-def get_latest_flash_model():
-    """
-    Dynamically finds the latest available Flash model using the new SDK.
-    """
+def get_working_flash_model(client: genai.Client) -> str:
+    excluded_keywords = {'omni', 'tts', 'live', 'audio', 'embedding', 'preview', 'robotics'}
+
+    fallback_candidates = [
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-1.5-flash'
+    ]
+
+    candidates = []
     try:
-        # Fetch available models via the client
-        available_models = [
-            m.name for m in client.models.list()
-        ]
+        for m in client.models.list():
+            name = getattr(m, 'name', str(m)).replace('models/', '')
+            name_lower = name.lower()
 
-        # Filter for 'flash' models
-        flash_models = [m for m in available_models if 'flash' in m.lower()]
+            if 'flash' in name_lower and not any(k in name_lower for k in excluded_keywords):
+                candidates.append(name)
 
-        if flash_models:
-            # Sort them so 'gemini-2.0-flash' or 'gemini-1.5-flash' comes first
-            flash_models.sort(reverse=True)
-            latest = flash_models[0]
-            print(f"🤖 Dynamic Model Selection: Using {latest}")
-            return latest
-
+        candidates.sort(reverse=True)
     except Exception as e:
-        print(f"⚠ Could not list models: {e}")
+        print(f"⚠️ Could not list models: {e}")
 
-    # Fallback to a stable default
+    if not candidates:
+        candidates = fallback_candidates
+
+    # Test candidates until one succeeds
+    for model_name in candidates:
+        try:
+            # Silence AFC warning by explicitly setting tools=[] for the pre-flight ping
+            client.models.generate_content(
+                model=model_name,
+                contents="ping",
+                config=types.GenerateContentConfig(
+                    max_output_tokens=1,
+                    tools=[]  # Explicitly disables tool/function check during ping
+                )
+            )
+            print(f"✅ Selected active model: {model_name}")
+            return model_name
+        except errors.APIError as e:
+            if e.code == 429:
+                print(f"⏭ Skipping {model_name} (Rate Limited / Quota Exhausted)")
+            else:
+                print(f"⏭ Skipping {model_name} (Error: {e.code})")
+        except Exception:
+            continue
+
     return 'gemini-2.5-flash'
 
 selected_model_name = get_latest_flash_model()
