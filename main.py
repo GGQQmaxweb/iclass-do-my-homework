@@ -31,7 +31,7 @@ BLACKLIST_COURSES = [
 
 # Initialize the new Client
 client = None
-if api_key:
+if GEMINI_API_KEY:
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
