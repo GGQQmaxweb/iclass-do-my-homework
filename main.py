@@ -8,7 +8,9 @@ import mimetypes
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
-from google import genai  # New SDK
+from google import genai
+from google.genai import types
+from google.genai import errors
 from PyPDF2 import PdfReader
 from markdown_pdf import MarkdownPdf, Section
 import markdown
