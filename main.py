@@ -81,7 +81,7 @@ def get_working_flash_model(client: genai.Client) -> str:
 
     return 'gemini-2.5-flash'
 
-selected_model_name = get_latest_flash_model()
+selected_model_name = get_working_flash_model()
 
 
 def parse_args() -> argparse.Namespace:
