@@ -30,7 +30,12 @@ BLACKLIST_COURSES = [
 ]
 
 # Initialize the new Client
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = None
+if api_key:
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        print(f"Failed to initialize Gemini client: {e}")
 
 def get_working_flash_model(client: genai.Client) -> str:
     excluded_keywords = {'omni', 'tts', 'live', 'audio', 'embedding', 'preview', 'robotics'}
@@ -81,8 +86,7 @@ def get_working_flash_model(client: genai.Client) -> str:
 
     return 'gemini-2.5-flash'
 
-selected_model_name = get_working_flash_model()
-
+selected_model_name = get_working_flash_model(client)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Auto submit selected TronClass homework.')
@@ -354,7 +358,7 @@ Please provide:
 4. Any recommended changes
 
 Keep suggestions concise and actionable."""
-    
+
     try:
         response = client.models.generate_content(
             model=selected_model_name,
