@@ -44,7 +44,21 @@ python bot.py
   3. **Refine / Redo**: Click **Redo / Add to Prompt** to give additional prompt instructions via a modal.
   4. **Confirm & Submit**: Click **Confirm & Submit** to convert the markdown to PDF, upload it to TronClass, and submit the homework automatically.
 
-### Run as a systemd Service (Background Daemon)
+### Run with Docker Compose (Recommended)
+You can easily deploy and run the bot using Docker Compose:
+
+```bash
+# Build and start the container in background
+docker compose up -d --build
+
+# View real-time logs
+docker compose logs -f
+
+# Stop the container
+docker compose down
+```
+
+### Run as a systemd Service (Alternative)
 To automatically configure and run the bot as a systemd background service on your server:
 
 ```bash

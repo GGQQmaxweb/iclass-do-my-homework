@@ -1,0 +1,10 @@
+services:
+  tronclass-bot:
+    build: .
+    container_name: tronclass-discord-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./skills:/app/skills
+      - ./tmp:/app/tmp
