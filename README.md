@@ -44,3 +44,22 @@ python bot.py
   3. **Refine / Redo**: Click **Redo / Add to Prompt** to give additional prompt instructions via a modal.
   4. **Confirm & Submit**: Click **Confirm & Submit** to convert the markdown to PDF, upload it to TronClass, and submit the homework automatically.
 
+### Run as a systemd Service (Background Daemon)
+To keep the bot running 24/7 in the background:
+
+```bash
+# 1. Copy the service file
+sudo cp tronclass-bot.service /etc/systemd/system/
+
+# 2. Reload systemd daemon
+sudo systemctl daemon-reload
+
+# 3. Enable and start the bot service
+sudo systemctl enable --now tronclass-bot.service
+
+# 4. Check status or logs
+sudo systemctl status tronclass-bot.service
+journalctl -u tronclass-bot.service -f
+```
+
+

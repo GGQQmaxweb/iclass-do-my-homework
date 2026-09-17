@@ -1,0 +1,22 @@
+[Unit]
+Description=TronClass Discord Bot Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ggqqmax
+WorkingDirectory=/home/ggqqmax/git/iclass-do-my-homework
+ExecStart=/home/ggqqmax/git/iclass-do-my-homework/.venv/bin/python /home/ggqqmax/git/iclass-do-my-homework/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# If deploying on another user or path, adjust:
+# User=your_username
+# WorkingDirectory=/path/to/iclass-do-my-homework
+# ExecStart=/path/to/iclass-do-my-homework/.venv/bin/python /path/to/iclass-do-my-homework/bot.py
+
+[Install]
+WantedBy=multi-user.target
