@@ -5,4 +5,5 @@ google-genai
 PyPDF2
 markdown
 markdown-pdf
+discord.py
 

@@ -413,7 +413,17 @@ async def download_files_for_activity(api: TronClassAPI, activity_data: dict) ->
 
     return '\n\n'.join(downloaded_texts)
 
-async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str, task_id: int, course_id: int | None, description: str, tmp_dir: Path) -> str:
+async def build_homework_prompt(
+    api: TronClassAPI,
+    title: str,
+    course_name: str,
+    task_id: int,
+    course_id: int | None,
+    description: str,
+    tmp_dir: Path,
+    interactive_skill: bool = True,
+    additional_instructions: str | None = None
+) -> str:
     course_summary = ''
     print(f"🔍 Fetching course info for course_id={course_id}...")
     if course_id is not None:
@@ -435,14 +445,15 @@ async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str,
                 print("-" * 60)
                 
                 # Ask user if they want to update the skill
-                response = input("\n📝 Update skill file with these suggestions? (y/n): ").strip().lower()
-                if response == 'y':
-                    skill_path = get_skill_path(course_name)
+                if interactive_skill:
                     try:
-                        with open(skill_path, 'a', encoding='utf-8') as f:
-                            f.write(f"\n\n## AI Suggestions (Updated: {datetime.datetime.now().strftime('%Y-%m-%d')})\n")
-                            f.write(suggestions)
-                        print(f"✅ Skill file updated: {skill_path}")
+                        response = input("\n📝 Update skill file with these suggestions? (y/n): ").strip().lower()
+                        if response == 'y':
+                            skill_path = get_skill_path(course_name)
+                            with open(skill_path, 'a', encoding='utf-8') as f:
+                                f.write(f"\n\n## AI Suggestions (Updated: {datetime.datetime.now().strftime('%Y-%m-%d')})\n")
+                                f.write(suggestions)
+                            print(f"✅ Skill file updated: {skill_path}")
                     except Exception as e:
                         print(f"⚠ Failed to update skill: {e}")
 
@@ -474,11 +485,83 @@ async def build_homework_prompt(api: TronClassAPI, title: str, course_name: str,
     if file_section:
         prompt_parts.append(file_section)
 
+    if additional_instructions:
+        prompt_parts.append(f"Additional User Instructions:\n{additional_instructions}")
+
     prompt_parts.append(
         "Provide a student submission as valid markdown. No emoji, keep answer short, use ZH-TW as main language except for single English words exactly as they appear in the question."
     )
 
     return '\n\n'.join([part for part in prompt_parts if part])
+
+
+async def generate_homework_solution(
+    api: TronClassAPI,
+    item: dict,
+    tmp_dir: Path = Path("./tmp"),
+    additional_instructions: str | None = None,
+    interactive_skill: bool = False
+) -> str:
+    course_name = item.get('course_name', '').strip()
+    title = item.get('title', '')
+    task_id = item['id']
+    course_id = item.get('course_id') or (item.get('course') or {}).get('id')
+    raw_desc = item.get('description') or ''
+    description = strip_html(raw_desc)
+
+    prompt = await build_homework_prompt(
+        api=api,
+        title=title,
+        course_name=course_name,
+        task_id=task_id,
+        course_id=course_id,
+        description=description,
+        tmp_dir=tmp_dir,
+        interactive_skill=interactive_skill,
+        additional_instructions=additional_instructions
+    )
+
+    response = await asyncio.to_thread(
+        client.models.generate_content,
+        model=selected_model_name,
+        contents=prompt
+    )
+    return response.text
+
+
+async def submit_homework_solution(
+    api: TronClassAPI,
+    task_id: int,
+    ai_content: str,
+    tmp_dir: Path = Path("./tmp")
+) -> tuple[bool, str, Path | None]:
+    markdown_path = tmp_dir / f"auto_submit_{task_id}.md"
+    pdf_path = tmp_dir / f"auto_submit_{task_id}.pdf"
+    with open(markdown_path, "w", encoding="utf-8") as f:
+        f.write(ai_content)
+
+    converted = await asyncio.to_thread(convert_markdown_to_pdf, ai_content, str(pdf_path))
+    if not converted:
+        return False, "PDF conversion failed", None
+
+    try:
+        print("📤 Uploading PDF...")
+        upload_id = await api.upload_file(str(pdf_path))
+
+        if upload_id and not (isinstance(upload_id, dict) and "error" in upload_id) and upload_id != "unable to find file":
+            success = await api.submit_homework(task_id, [upload_id])
+            if isinstance(success, dict) and "Submission successful" in success:
+                return True, f"Successfully submitted (Upload ID: {upload_id})", pdf_path
+            elif isinstance(success, (set, tuple, list)) or (isinstance(success, dict) and "error" in str(success)):
+                return False, f"Submit failed: {success}", pdf_path
+            elif success:
+                return True, f"Successfully submitted (Upload ID: {upload_id})", pdf_path
+            return False, f"Submit failed: {success}", pdf_path
+        else:
+            return False, f"Upload failed: {upload_id}", pdf_path
+    except Exception as e:
+        return False, f"Submission error: {e}", pdf_path
+
 
 async def main():
     args = parse_args()
@@ -527,51 +610,23 @@ async def main():
         if (args.homework is not None) or (0 < time_remaining.days <= DUE_SOON_DAYS):
             print(f"\n📝 Processing Boring Homework: {title} (Course: {course_name})")
 
-            course_id = item.get('course_id') or (item.get('course') or {}).get('id')
-            raw_desc = item.get('description') or ''
-            description = strip_html(raw_desc)
-
-            prompt = await build_homework_prompt(api, title, course_name, task_id, course_id, description, tmp_dir)
-
             try:
-                response = client.models.generate_content(
-                    model=selected_model_name,
-                    contents=prompt
+                ai_content = await generate_homework_solution(
+                    api=api,
+                    item=item,
+                    tmp_dir=tmp_dir,
+                    interactive_skill=True
                 )
-                ai_content = response.text
                 print(f"🤖 AI Generated Content:\n{ai_content[:500]}...")  # Print first 500 chars
             except Exception as e:
                 print(f"❌ AI Generation failed: {e}")
                 continue
 
-            # 5. File Handling & Submission
-            markdown_path = tmp_dir / f"auto_submit_{task_id}.md"
-            pdf_path = tmp_dir / f"auto_submit_{task_id}.pdf"
-            with open(markdown_path, "w", encoding="utf-8") as f:
-                f.write(ai_content)
-
-            if not convert_markdown_to_pdf(ai_content, str(pdf_path)):
-                print("❌ PDF conversion failed")
-                clean_tmp_dir(tmp_dir)
-                tmp_dir.mkdir(exist_ok=True)
-                continue
-
-            try:
-                print(f"📤 Uploading PDF...")
-                upload_id = await api.upload_file(str(pdf_path))
-
-                if upload_id:
-                    success = await api.submit_homework(task_id, [upload_id])
-                    if success:
-                       print(f"✅ Successfully submitted {title}")
-                    pass
-                else:
-                    print("❌ Failed to get Upload ID.")
-            except Exception as e:
-                print(f"❌ Submission error: {e}")
-            finally:
-                #clean_tmp_dir(tmp_dir)
-                tmp_dir.mkdir(exist_ok=True)
+            success, msg, _ = await submit_homework_solution(api, task_id, ai_content, tmp_dir)
+            if success:
+                print(f"✅ {msg} for {title}")
+            else:
+                print(f"❌ {msg} for {title}")
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
 
