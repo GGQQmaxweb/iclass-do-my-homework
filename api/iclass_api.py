@@ -236,3 +236,50 @@ class TronClassAPI:
                 return {"Deletion failed": response.status_code, "details": response.text}
         except requests.exceptions.RequestException as e:
             return {"error": f"Error deleting uploads: {str(e)}"}
+
+    async def get_exam_questions(self, exam_id: int):
+        url = f"https://iclass.tku.edu.tw/api/exams/{exam_id}/distribute"
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Error fetching exam questions: {str(e)}"}
+
+    async def submit_exam(self, exam_id: int, exam_paper_instance_id: int, subjects: list, exam_finished: bool = True):
+        url = f"https://iclass.tku.edu.tw/api/exams/{exam_id}/submissions"
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'content-type': 'application/json;charset=UTF-8',
+            'origin': 'https://iclass.tku.edu.tw',
+        }
+        payload = {
+            "exam_paper_instance_id": exam_paper_instance_id,
+            "subjects": subjects,
+            "examFinished": exam_finished
+        }
+        try:
+            response = self.session.post(url, headers=headers, json=payload)
+            if response.status_code in (200, 201):
+                return response.json()
+            return {"error": f"Exam submission failed with status {response.status_code}: {response.text}"}
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Error submitting exam: {str(e)}"}
+
+    async def get_exam_submissions(self, exam_id: int):
+        url = f"https://iclass.tku.edu.tw/api/exams/{exam_id}/submissions"
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Error fetching exam submissions: {str(e)}"}
+
+    async def get_exam_submission_detail(self, exam_id: int, submission_id: int):
+        url = f"https://iclass.tku.edu.tw/api/exams/{exam_id}/submissions/{submission_id}"
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Error fetching submission detail: {str(e)}"}
