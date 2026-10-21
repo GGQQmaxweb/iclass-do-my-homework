@@ -16,6 +16,14 @@ from markdown_pdf import MarkdownPdf, Section
 import markdown
 from api.auth_module import Authenticator
 from api.iclass_api import TronClassAPI
+from api.quiz_models import Question, Answer, QuestionType
+from api.quiz_engine import (
+    parse_questions,
+    decide_paper,
+    format_paper_canonical,
+    format_paper_detailed_markdown,
+)
+from api.llm_answerer import answer_paper
 
 # --- Configuration ---
 load_dotenv()
@@ -592,6 +600,114 @@ async def submit_homework_solution(
         return False, f"Submission error: {e}", pdf_path
 
 
+async def generate_exam_solution(
+    api: TronClassAPI,
+    item: dict,
+) -> tuple[dict, list[Question], list[Answer], str, str]:
+    task_id = item["id"]
+    title = item.get("title", f"Exam #{task_id}")
+    course_name = item.get("course_name", "")
+
+    paper_data = await api.get_exam_questions(task_id)
+    if isinstance(paper_data, dict) and "error" in paper_data:
+        raise RuntimeError(paper_data["error"])
+
+    paper_instance_id = paper_data.get("exam_paper_instance_id")
+    raw_subjects = paper_data.get("subjects") or []
+
+    questions = parse_questions(raw_subjects)
+    if not questions:
+        raise RuntimeError("No answerable questions found in exam paper.")
+
+    plan = decide_paper(questions)
+    answers = await answer_paper(
+        client=client,
+        model_name=selected_model_name,
+        questions=questions,
+        pending_questions=list(plan.pending),
+        already_decided=list(plan.answers),
+    )
+
+    canonical_summary = format_paper_canonical(questions, answers)
+    detailed_markdown = format_paper_detailed_markdown(title, course_name, questions, answers)
+
+    metadata = {
+        "exam_paper_instance_id": paper_instance_id,
+        "source": plan.source.value,
+        "total_questions": len(questions),
+        "replayed_count": len(plan.answers),
+        "ai_count": len(plan.pending),
+    }
+
+    return metadata, questions, answers, canonical_summary, detailed_markdown
+
+
+async def submit_exam_solution(
+    api: TronClassAPI,
+    task_id: int,
+    paper_instance_id: int,
+    answers: list[Answer],
+    resubmit_for_correct: bool = True,
+) -> tuple[bool, str, dict]:
+    subjects_payload = [a.to_payload() for a in answers]
+    res = await api.submit_exam(task_id, paper_instance_id, subjects_payload, exam_finished=True)
+
+    if isinstance(res, dict) and "error" in res:
+        return False, res["error"], res
+
+    submission_id = (res or {}).get("submission_id") or (res or {}).get("id")
+    score = (res or {}).get("exam_score") or (res or {}).get("score")
+    msg = f"Exam submitted successfully! Submission ID: {submission_id}"
+    if score is not None:
+        msg += f", Score: {score}"
+
+    # Check for retake and leaked correct answers
+    if resubmit_for_correct and (res or {}).get("allow_retake_exam") and submission_id:
+        try:
+            review = await api.get_exam_submission_detail(task_id, submission_id)
+            correct_data = (review or {}).get("correct_answers_data", {}).get("correct_answers") or []
+            if correct_data:
+                fresh_paper = await api.get_exam_questions(task_id)
+                fresh_instance_id = fresh_paper.get("exam_paper_instance_id")
+                fresh_questions = parse_questions(fresh_paper.get("subjects") or [])
+                options_by_sid = {q.subject_id: {o.id for o in q.options} for q in fresh_questions if q.options}
+                by_id = {a.subject_id: a for a in answers}
+
+                for c in correct_data:
+                    if not isinstance(c, dict):
+                        continue
+                    sid = int(c.get("subject_id") or 0)
+                    base = by_id.get(sid)
+                    option_ids = tuple(int(o) for o in (c.get("answer_option_ids") or []))
+                    valid = options_by_sid.get(sid)
+                    if option_ids and valid and not set(option_ids).issubset(valid):
+                        option_ids = ()
+                    blanks = tuple(
+                        (int(b.get("sort") or 0), str(b.get("content") or "").strip())
+                        for b in (c.get("correct_answers") or [])
+                        if isinstance(b, dict)
+                    )
+                    answer_text = str(c.get("answer") or "").strip()
+                    by_id[sid] = Answer(
+                        subject_id=sid,
+                        answer_option_ids=option_ids or (base.answer_option_ids if base else ()),
+                        answer_text=answer_text or (base.answer_text if base else ""),
+                        blanks=blanks or (base.blanks if base else ()),
+                        parent_id=base.parent_id if base else int(c.get("parent_id") or 0),
+                        answer_type=base.answer_type if base else "",
+                    )
+                corrected_subjects = [a.to_payload() for a in by_id.values()]
+                second_res = await api.submit_exam(task_id, fresh_instance_id, corrected_subjects, exam_finished=True)
+                if not (isinstance(second_res, dict) and "error" in second_res):
+                    new_score = (second_res or {}).get("exam_score") or (second_res or {}).get("score")
+                    msg += f" (Correct-answer resubmit succeeded! Final Score: {new_score})"
+                    return True, msg, second_res
+        except Exception as e:
+            print(f"⚠️ Auto-resubmit with leaked answers failed: {e}")
+
+    return True, msg, res
+
+
 async def main():
     args = parse_args()
     tmp_dir = Path("./tmp")
@@ -614,9 +730,9 @@ async def main():
         args.homework = select_homework_by_index(todos)
 
     if args.homework:
-        print(f"🔎 Selected homework filters: {args.homework}")
+        print(f"🔎 Selected task filters: {args.homework}")
     elif args.homework is not None:
-        print("No homework selected. Exiting.")
+        print("No task selected. Exiting.")
         return
 
     for item in todos:
@@ -625,37 +741,54 @@ async def main():
         course_name = item.get('course_name', '').strip()
         title = item['title']
         task_id = item['id']
+        task_type = item.get('type', 'homework')
 
         # 1. Check Blacklist
         if any(blacklisted in course_name for blacklisted in BLACKLIST_COURSES):
             print(f"🛡 Skipping '{title}' - Course '{course_name}' is on the blacklist.")
             continue
 
-        # 2. Check Deadline (skip if user explicitly selected homework via -u)
-        end_time_str = item['end_time']
-        due_date = datetime.datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
-        time_remaining = due_date - now
+        # 2. Check Deadline (skip if user explicitly selected task via -u)
+        end_time_str = item.get('end_time', '')
+        if end_time_str:
+            due_date = datetime.datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+            time_remaining = due_date - now
+            is_urgent = (0 < time_remaining.days <= DUE_SOON_DAYS)
+        else:
+            is_urgent = True
 
-        if (args.homework is not None) or (0 < time_remaining.days <= DUE_SOON_DAYS):
-            print(f"\n📝 Processing Boring Homework: {title} (Course: {course_name})")
-
-            try:
-                ai_content = await generate_homework_solution(
-                    api=api,
-                    item=item,
-                    tmp_dir=tmp_dir,
-                    interactive_skill=True
-                )
-                print(f"🤖 AI Generated Content:\n{ai_content[:500]}...")  # Print first 500 chars
-            except Exception as e:
-                print(f"❌ AI Generation failed: {e}")
-                continue
-
-            success, msg, _ = await submit_homework_solution(api, task_id, ai_content, tmp_dir)
-            if success:
-                print(f"✅ {msg} for {title}")
+        if (args.homework is not None) or is_urgent:
+            if task_type == 'exam':
+                print(f"\n🧪 Processing Exam: {title} (Course: {course_name})")
+                try:
+                    meta, questions, answers, summary, details = await generate_exam_solution(api, item)
+                    print(f"🤖 Exam AI Answers Summary:\n{summary}")
+                    success, msg, _ = await submit_exam_solution(api, task_id, meta["exam_paper_instance_id"], answers)
+                    if success:
+                        print(f"✅ {msg} for {title}")
+                    else:
+                        print(f"❌ {msg} for {title}")
+                except Exception as e:
+                    print(f"❌ Exam processing failed: {e}")
             else:
-                print(f"❌ {msg} for {title}")
+                print(f"\n📝 Processing Boring Homework: {title} (Course: {course_name})")
+                try:
+                    ai_content = await generate_homework_solution(
+                        api=api,
+                        item=item,
+                        tmp_dir=tmp_dir,
+                        interactive_skill=True
+                    )
+                    print(f"🤖 AI Generated Content:\n{ai_content[:500]}...")
+                except Exception as e:
+                    print(f"❌ AI Generation failed: {e}")
+                    continue
+
+                success, msg, _ = await submit_homework_solution(api, task_id, ai_content, tmp_dir)
+                if success:
+                    print(f"✅ {msg} for {title}")
+                else:
+                    print(f"❌ {msg} for {title}")
         else:
             print(f"😴 Skipping '{title}' (Not urgent).")
 

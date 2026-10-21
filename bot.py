@@ -17,8 +17,11 @@ from main import (
     BLACKLIST_COURSES,
     generate_homework_solution,
     submit_homework_solution,
+    generate_exam_solution,
+    submit_exam_solution,
     strip_html,
 )
+from api.quiz_models import Question, Answer
 
 load_dotenv()
 
@@ -192,6 +195,139 @@ class HomeworkReviewView(discord.ui.View):
                 )
 
 
+class ExamReviewView(discord.ui.View):
+    def __init__(
+        self,
+        author_id: int,
+        api: TronClassAPI,
+        item: dict,
+        meta: dict,
+        questions: list[Question],
+        answers: list[Answer],
+        summary: str,
+        details_md: str,
+        timeout: float = 600.0,
+    ):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.api = api
+        self.item = item
+        self.meta = meta
+        self.questions = questions
+        self.answers = answers
+        self.summary = summary
+        self.details_md = details_md
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ You are not allowed to interact with this session.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm & Submit Exam", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+        status_msg = await interaction.followup.send("⏳ Submitting exam answers to TronClass...")
+
+        task_id = self.item["id"]
+        title = self.item.get("title", f"Exam #{task_id}")
+        paper_instance_id = self.meta.get("exam_paper_instance_id")
+
+        success, result_message, res_data = await submit_exam_solution(
+            api=self.api,
+            task_id=task_id,
+            paper_instance_id=paper_instance_id,
+            answers=self.answers,
+            resubmit_for_correct=True,
+        )
+
+        embed = discord.Embed(
+            title=f"{'✅ 測驗提交成功' if success else '❌ 測驗提交失敗'}: {title}",
+            description=result_message,
+            color=discord.Color.green() if success else discord.Color.red(),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+        await status_msg.edit(content=None, embed=embed)
+        self.stop()
+
+    @discord.ui.button(label="Regenerate", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def regenerate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            await self.message.edit(content="🤖 Regenerating exam answers with AI...", view=self)
+
+        task_id = self.item["id"]
+        title = self.item.get("title", f"Exam #{task_id}")
+        course_name = self.item.get("course_name", "").strip()
+
+        try:
+            meta, questions, answers, summary, details_md = await generate_exam_solution(
+                api=self.api,
+                item=self.item,
+            )
+            self.meta = meta
+            self.questions = questions
+            self.answers = answers
+            self.summary = summary
+            self.details_md = details_md
+
+            embed = discord.Embed(
+                title=f"🧪 測驗解答預覽 (已重新生成): {title}",
+                description=format_preview(summary),
+                color=discord.Color.purple(),
+            )
+            embed.add_field(name="Course", value=course_name or "Unknown", inline=True)
+            embed.add_field(name="Total Questions", value=f"{len(questions)} 題", inline=True)
+            embed.add_field(name="Source", value=meta.get("source", "llm"), inline=True)
+            embed.set_footer(text="Click 'Confirm & Submit Exam' to submit, or 'Regenerate' to re-answer.")
+
+            file = discord.File(
+                io.BytesIO(details_md.encode("utf-8")),
+                filename=f"exam_{task_id}_answers.md",
+            )
+
+            for child in self.children:
+                child.disabled = False
+
+            if self.message:
+                await self.message.edit(
+                    content=None,
+                    embed=embed,
+                    attachments=[file],
+                    view=self,
+                )
+        except Exception as e:
+            for child in self.children:
+                child.disabled = False
+            if self.message:
+                await self.message.edit(
+                    content=f"❌ Regeneration failed: {e}",
+                    view=self
+                )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="🚫 Exam answering was cancelled.", embed=None, attachments=[], view=self
+        )
+        self.stop()
+
+
 class HomeworkSelect(discord.ui.Select):
     def __init__(self, author_id: int, api: TronClassAPI, todos: list[dict]):
         self.author_id = author_id
@@ -202,7 +338,10 @@ class HomeworkSelect(discord.ui.Select):
         # Discord Select components accept up to 25 items
         for item in todos[:25]:
             task_id = str(item["id"])
-            title = item.get("title", "<No Title>")[:95]
+            raw_title = item.get("title", "<No Title>")
+            is_exam = item.get("type") == "exam"
+            prefix = "🧪 [測驗] " if is_exam else "📝 [作業] "
+            title = (prefix + raw_title)[:95]
             course = item.get("course_name", "<No Course>")[:45]
             due = item.get("end_time", "")
             if due:
@@ -224,7 +363,7 @@ class HomeworkSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Select a homework to process...",
+            placeholder="Select a task (homework or exam) to process...",
             min_values=1,
             max_values=1,
             options=options,
@@ -233,7 +372,7 @@ class HomeworkSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message(
-                "❌ You are not allowed to select this homework.", ephemeral=True
+                "❌ You are not allowed to select this task.", ephemeral=True
             )
             return
 
@@ -244,10 +383,66 @@ class HomeworkSelect(discord.ui.Select):
             return
 
         await interaction.response.defer()
-        title = item.get("title", f"Homework #{selected_id}")
+        title = item.get("title", f"Task #{selected_id}")
         course_name = item.get("course_name", "").strip()
+        is_exam = item.get("type") == "exam"
 
-        # Update message to show processing
+        if is_exam:
+            # --- Exam Workflow ---
+            await interaction.edit_original_response(
+                content=f"🧪 Fetching exam questions & generating AI answers for **{title}** ({course_name})... Please wait.",
+                view=None,
+                embed=None,
+            )
+
+            try:
+                meta, questions, answers, summary, details_md = await generate_exam_solution(
+                    api=self.api,
+                    item=item,
+                )
+
+                embed = discord.Embed(
+                    title=f"🧪 測驗解答預覽: {title}",
+                    description=format_preview(summary),
+                    color=discord.Color.purple(),
+                )
+                embed.add_field(name="Course", value=course_name or "Unknown", inline=True)
+                embed.add_field(name="Total Questions", value=f"{len(questions)} 題", inline=True)
+                embed.add_field(name="Source", value=meta.get("source", "llm"), inline=True)
+                embed.set_footer(text="Click 'Confirm & Submit Exam' to submit, or 'Regenerate' to re-answer.")
+
+                file = discord.File(
+                    io.BytesIO(details_md.encode("utf-8")),
+                    filename=f"exam_{selected_id}_answers.md",
+                )
+
+                review_view = ExamReviewView(
+                    author_id=self.author_id,
+                    api=self.api,
+                    item=item,
+                    meta=meta,
+                    questions=questions,
+                    answers=answers,
+                    summary=summary,
+                    details_md=details_md,
+                )
+                message = await interaction.edit_original_response(
+                    content=None,
+                    embed=embed,
+                    attachments=[file],
+                    view=review_view,
+                )
+                review_view.message = message
+
+            except Exception as e:
+                cancel_view = SimpleCancelView(author_id=self.author_id)
+                await interaction.edit_original_response(
+                    content=f"❌ Error generating answers for exam **{title}**: {e}",
+                    view=cancel_view,
+                )
+            return
+
+        # --- Homework Workflow ---
         await interaction.edit_original_response(
             content=f"🤖 Analyzing materials & generating AI solution for **{title}** ({course_name})... Please wait.",
             view=None,
@@ -355,7 +550,7 @@ async def handle_do_homework(interaction_or_ctx, author: discord.User | discord.
     else:
         send_func = interaction_or_ctx.send
 
-    init_msg = await send_func("🔐 Logging into TronClass and fetching homework list...")
+    init_msg = await send_func("🔐 Logging into TronClass and fetching pending tasks (homework & exams)...")
 
     try:
         auth = Authenticator()
@@ -373,7 +568,7 @@ async def handle_do_homework(interaction_or_ctx, author: discord.User | discord.
 
     todos = data.get("todo_list", [])
     if not todos:
-        content = "🎉 No pending homework tasks found on TronClass!"
+        content = "🎉 No pending homework or exam tasks found on TronClass!"
         cancel_view = SimpleCancelView(author_id=author.id)
         if is_interaction:
             await interaction_or_ctx.edit_original_response(content=content, view=cancel_view)
@@ -401,8 +596,8 @@ async def handle_do_homework(interaction_or_ctx, author: discord.User | discord.
         return
 
     embed = discord.Embed(
-        title="📚 TronClass Homework List",
-        description="Select a homework from the dropdown below to generate a solution with AI.",
+        title="📚 TronClass 待辦清單 (作業 & 測驗)",
+        description="請由下方選單選取欲進行的作業或測驗以自動作答與預覽：",
         color=discord.Color.gold(),
         timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
@@ -412,14 +607,16 @@ async def handle_do_homework(interaction_or_ctx, author: discord.User | discord.
         title = item.get("title", "<No Title>")
         course = item.get("course_name", "<No Course>")
         due = item.get("end_time", "Unknown")
+        is_exam = item.get("type") == "exam"
+        badge = "🧪 [測驗]" if is_exam else "📝 [作業]"
         embed.add_field(
-            name=f"{idx}. {title}",
+            name=f"{idx}. {badge} {title}",
             value=f"**Course**: {course}\n**Due**: {due}\n**ID**: `{task_id}`",
             inline=False,
         )
 
     if len(active_todos) > 10:
-        embed.set_footer(text=f"Showing 10 of {len(active_todos)} assignments. (Dropdown has up to 25)")
+        embed.set_footer(text=f"Showing 10 of {len(active_todos)} tasks. (Dropdown has up to 25)")
 
     view = HomeworkSelectView(author_id=author.id, api=api, todos=active_todos)
 
@@ -429,12 +626,12 @@ async def handle_do_homework(interaction_or_ctx, author: discord.User | discord.
         await init_msg.edit(content=None, embed=embed, view=view)
 
 
-@bot.tree.command(name="do_homework", description="List TronClass homework, generate AI solution, review & submit.")
+@bot.tree.command(name="do_homework", description="List TronClass tasks (homework & exams), generate AI solution, review & submit.")
 async def do_homework_command(interaction: discord.Interaction):
     await handle_do_homework(interaction, interaction.user)
 
 
-@bot.command(name="do_homework", aliases=["dohomework"])
+@bot.command(name="do_homework", aliases=["dohomework", "exam"])
 async def do_homework_prefix(ctx: commands.Context):
     await handle_do_homework(ctx, ctx.author)
 
