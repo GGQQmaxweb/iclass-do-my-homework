@@ -290,6 +290,26 @@ def format_answer_canonical(question: Question, answer: Answer) -> str:
     return strip_html_tags(answer.answer_text) or "(未作答)"
 
 
+def format_answer_with_content(question: Question, answer: Optional[Answer]) -> str:
+    if not answer:
+        return "(未作答)"
+    if (question.is_selection or question.qtype == QuestionType.MATCHING) and question.options:
+        chosen = []
+        for idx, opt in enumerate(question.options):
+            if opt.id in answer.answer_option_ids:
+                lbl = option_label(idx)
+                content = strip_html_tags(opt.content)
+                if content:
+                    chosen.append(f"{lbl}. {content}")
+                else:
+                    chosen.append(lbl)
+        return ", ".join(chosen) if chosen else "(未作答)"
+    if question.is_blank or answer.blanks:
+        blanks_text = " ||| ".join(strip_html_tags(c) for _, c in answer.blanks)
+        return blanks_text if blanks_text else "(未作答)"
+    return strip_html_tags(answer.answer_text) or "(未作答)"
+
+
 def format_paper_canonical(questions: Iterable[Question], answers: Iterable[Answer]) -> str:
     by_id = {a.subject_id: a for a in answers}
     groups: Dict[str, List[str]] = {}
@@ -299,6 +319,17 @@ def format_paper_canonical(questions: Iterable[Question], answers: Iterable[Answ
         label = _QTYPE_LABEL_ZH.get(question.qtype, "其他")
         groups.setdefault(label, []).append(f"{index}. {rendered}")
     return "\n".join(f"**{label}**：{'  '.join(cells)}" for label, cells in groups.items())
+
+
+def format_paper_qa(questions: Iterable[Question], answers: Iterable[Answer]) -> str:
+    by_id = {a.subject_id: a for a in answers}
+    lines: List[str] = []
+    for index, q in enumerate(questions, 1):
+        ans = by_id.get(q.subject_id)
+        ans_repr = format_answer_with_content(q, ans)
+        stem = q.stem or "(題目)"
+        lines.append(f"**{index}. Q**: {stem}\n   **A**: {ans_repr}")
+    return "\n\n".join(lines)
 
 
 def format_paper_detailed_markdown(

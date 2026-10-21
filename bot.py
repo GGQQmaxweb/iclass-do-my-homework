@@ -34,7 +34,7 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-def format_preview(text: str, max_length: int = 1500) -> str:
+def format_preview(text: str, max_length: int = 3000) -> str:
     if len(text) <= max_length:
         return text
     return text[:max_length] + "\n\n... *(Truncated. See attached .md file for full response)*"

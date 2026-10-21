@@ -21,6 +21,7 @@ from api.quiz_engine import (
     parse_questions,
     decide_paper,
     format_paper_canonical,
+    format_paper_qa,
     format_paper_detailed_markdown,
 )
 from api.llm_answerer import answer_paper
@@ -629,6 +630,8 @@ async def generate_exam_solution(
     )
 
     canonical_summary = format_paper_canonical(questions, answers)
+    qa_list = format_paper_qa(questions, answers)
+    combined_summary = f"{canonical_summary}\n\n{qa_list}"
     detailed_markdown = format_paper_detailed_markdown(title, course_name, questions, answers)
 
     metadata = {
@@ -639,7 +642,7 @@ async def generate_exam_solution(
         "ai_count": len(plan.pending),
     }
 
-    return metadata, questions, answers, canonical_summary, detailed_markdown
+    return metadata, questions, answers, combined_summary, detailed_markdown
 
 
 async def submit_exam_solution(
